@@ -471,6 +471,20 @@ void afl_fsrv_init(afl_forkserver_t *fsrv) {
   fsrv->no_unlink = false;
   fsrv->exec_tmout = EXEC_TIMEOUT;
   fsrv->init_tmout = EXEC_TIMEOUT * FORK_WAIT_MULT;
+  fsrv->dyn_tmout_mode = 0;
+  fsrv->dyn_tmout_max = 25000;
+
+  fsrv->dyn_active = 0;
+  fsrv->dyn_count_func = NULL;
+  fsrv->dyn_elapsed_ms = 0;
+  fsrv->dyn_last_checkpoint_ms = 0;
+  fsrv->dyn_outcome = DYN_OUTCOME_NONE;
+  fsrv->dyn_n_checks = 0;
+  fsrv->dyn_total_extended = 0;
+  fsrv->dyn_total_finished = 0;
+  fsrv->dyn_total_stall = 0;
+  fsrv->dyn_total_cap = 0;
+
   fsrv->mem_limit = MEM_LIMIT;
   fsrv->out_file = NULL;
   fsrv->child_kill_signal = SIGKILL;
@@ -651,7 +665,7 @@ static u32 __attribute__((hot)) read_s32_timed(s32 fd, s32 *buf, u32 timeout_ms,
   struct pollfd fds[1];
   int           nfds = 1;
 
-  u32 read_start = get_cur_time_us();
+  u64 read_start = get_cur_time_us();
 
   memset(&fds, 0, sizeof(fds));
   fds[0].fd = fd;
@@ -2663,6 +2677,11 @@ static inline void afl_fsrv_persistent_record_reset(afl_forkserver_t *fsrv) {
 fsrv_run_result_t __attribute__((hot)) afl_fsrv_run_target(
     afl_forkserver_t *fsrv, u32 timeout, volatile u8 *stop_soon_p) {
 
+ fsrv->dyn_elapsed_ms = 0;
+ fsrv->dyn_last_checkpoint_ms = 0;
+ fsrv->dyn_outcome = DYN_OUTCOME_NONE;
+ fsrv->dyn_n_checks = 0;
+
   s32 res;
   u32 exec_ms;
   u32 write_value = fsrv->last_run_timed_out;
@@ -2920,26 +2939,110 @@ fsrv_run_result_t __attribute__((hot)) afl_fsrv_run_target(
 
 #endif
 
+	// Get the start time of the first test so that you can subtract the curr time 
+	// when a test case timesout and add extra time for a test case
+ 	u64 dyn_start_us = 0;
+  if (unlikely(fsrv->dyn_count_func && fsrv->dyn_active)) {
+    dyn_start_us = get_cur_time_us();
+  }
+
   exec_ms = read_s32_timed(fsrv->fsrv_st_fd, &fsrv->child_status, timeout,
                            stop_soon_p);
 
   if (exec_ms > timeout) {
 
-    /* If there was no response from forkserver after timeout milliseconds,
-    we kill the child. The forkserver should inform us afterwards */
+		u8 kill_now = 1;
 
-    s32 tmp_pid = fsrv->child_pid;
-    if (tmp_pid > 0) {
+		// dynamic timeout mode is active and the test timed out. Using mode 1 or 2 
+		// compare coverage and either kill the test or increase the timeout
+    if (unlikely(fsrv->dyn_count_func && fsrv->dyn_active)) {
+			MEM_BARRIER();
+      u8 increase_tmout = fsrv->dyn_count_func(fsrv->afl_ptr);
 
-      kill(tmp_pid, fsrv->child_kill_signal);
-      fsrv->child_pid = -1;
+			if (!increase_tmout) {
+        fsrv->dyn_n_checks++;
+        fsrv->dyn_last_checkpoint_ms = timeout;
+        fsrv->dyn_outcome = DYN_OUTCOME_STALL;
+      }
 
-    }
+			u32 new_tmout = timeout;
+      while (increase_tmout) {
+				kill_now = 0;
+				fsrv->dyn_n_checks++;
+        fsrv->dyn_last_checkpoint_ms = new_tmout;
 
-    fsrv->last_run_timed_out = 1;
-    if (read(fsrv->fsrv_st_fd, &fsrv->child_status, 4) < 4) { exec_ms = 0; }
+				// Already at max tmout so exit
+				if (new_tmout >= fsrv->dyn_tmout_max) {
+          fsrv->dyn_outcome = DYN_OUTCOME_CAP;
+					kill_now = 1;
+          break;
+        }
 
-  }
+				// Increase the time
+				if (fsrv->dyn_n_checks % 3 == 2) {
+          new_tmout = new_tmout * 5 / 2; // x2.5
+        } else {
+          new_tmout = new_tmout * 2; // x2
+        }
+
+				// Set to the max if the increase if above the max
+        if (new_tmout > fsrv->dyn_tmout_max) { 
+					new_tmout = fsrv->dyn_tmout_max; 
+				}
+
+				// Increase the time and allow the test to run with the increased tmout given extra elapsed time.
+				u32 elapsed_ms = (u32)((get_cur_time_us() - dyn_start_us) / 1000);
+        u32 wait_ms = new_tmout > elapsed_ms ? new_tmout - elapsed_ms : 1;
+
+        exec_ms = read_s32_timed(fsrv->fsrv_st_fd, &fsrv->child_status,
+                                 wait_ms, stop_soon_p);
+
+				// The test failed when trying to run it with an additional tmout
+				if (!exec_ms) {
+          kill_now = 0;
+          break;
+        }
+
+				// It exited with the additional tmout
+        if (exec_ms <= wait_ms) {
+          kill_now = 0;
+          fsrv->dyn_outcome = DYN_OUTCOME_FINISHED;
+          break;
+        }
+				
+				// Check coverage again and recursively increase the tmout
+				MEM_BARRIER();
+				increase_tmout = fsrv->dyn_count_func(fsrv->afl_ptr);
+
+				// Did not hit new coverage so exit
+				if (!increase_tmout) {
+						fsrv->dyn_n_checks++;
+						fsrv->dyn_last_checkpoint_ms = new_tmout;
+						fsrv->dyn_outcome = DYN_OUTCOME_STALL;
+						kill_now = 1;
+				}
+			}
+      fsrv->dyn_elapsed_ms = (u32)((get_cur_time_us() - dyn_start_us) / 1000);
+		}
+		
+		
+		// Already given but needs kill_now so that it kills when the last test_case 
+		// succeeds or fails at the additional tmout checkpoint
+		if (kill_now) {
+			/* If there was no response from forkserver after timeout milliseconds,
+			we kill the child. The forkserver should inform us afterwards */
+
+			s32 tmp_pid = fsrv->child_pid;
+			if (tmp_pid > 0) {
+				kill(tmp_pid, fsrv->child_kill_signal);
+				fsrv->child_pid = -1;
+			}
+
+			fsrv->last_run_timed_out = 1;
+			if (read(fsrv->fsrv_st_fd, &fsrv->child_status, 4) < 4) { exec_ms = 0; }
+
+		}
+	}
 
   if (!exec_ms) {
 

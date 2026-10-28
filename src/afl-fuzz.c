@@ -2060,6 +2060,34 @@ void afl_check_environment(afl_state_t *afl) {
 
   }
 
+  if (afl->afl_env.afl_dyn_tmout) {
+
+    s32 dyn_tmout_mode = atoi(afl->afl_env.afl_dyn_tmout);
+    if (afl->timeout_given == 2) { FATAL("AFL_DYN_TMOUT does not work with -t N+"); }
+
+    if (afl->timeout_given == 0) {
+        afl->fsrv.exec_tmout = 5;
+        afl->timeout_given = 1;
+    }
+    if (dyn_tmout_mode < 0 || dyn_tmout_mode > 2) {FATAL("Invalid value for AFL_DYN_TMOUT"); }
+    afl->fsrv.dyn_tmout_mode = (u32)dyn_tmout_mode;
+
+    // pick which coverage check the timeout loop calls
+    if (afl->fsrv.dyn_tmout_mode == 1) {
+      afl->fsrv.dyn_count_func = dyn_mode1_new_coverage;
+    } else if (afl->fsrv.dyn_tmout_mode == 2) {
+      afl->fsrv.dyn_count_func = dyn_mode2_new_coverage;
+    }
+  }
+
+  if (afl->afl_env.afl_dyn_tmout_max) {
+
+    s32 dyn_tmout_max = atoi(afl->afl_env.afl_dyn_tmout_max);
+    if (!afl->fsrv.dyn_tmout_mode) { FATAL("AFL_DYN_TMOUT_MAX requires AFL_DYN_TMOUT=1 or 2"); }
+    if (dyn_tmout_max < 5) {FATAL("Invalid value for AFL_DYN_TMOUT_MAX"); }
+    afl->fsrv.dyn_tmout_max = (u32)dyn_tmout_max;
+  }
+
   if (afl->afl_env.afl_exit_on_time) {
 
     u64 exit_on_time = atoi(afl->afl_env.afl_exit_on_time);

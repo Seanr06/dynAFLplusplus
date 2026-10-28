@@ -396,6 +396,10 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
     use_tmout = MAX(afl->fsrv.exec_tmout + CAL_TMOUT_ADD,
                     afl->fsrv.exec_tmout * CAL_TMOUT_PERC / 100);
 
+    // Dyn_tmout mode is active so use a calibration ceiling of the max_dyn_tmout
+    if (unlikely(afl->fsrv.dyn_count_func)) {
+        use_tmout = afl->fsrv.dyn_tmout_max;
+    }
   }
 
   ++q->cal_failed;
@@ -1515,7 +1519,9 @@ u8 __attribute__((hot)) common_fuzz_stuff(afl_state_t *afl, u8 *out_buf,
 
   }
 
+  afl->fsrv.dyn_active = 1;
   fault = fuzz_run_target(afl, &afl->fsrv, afl->fsrv.exec_tmout);
+  afl->fsrv.dyn_active = 0;
 
   if (afl->stop_soon) { return 1; }
 

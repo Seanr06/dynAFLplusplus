@@ -616,7 +616,7 @@ typedef struct afl_env_vars {
   u16 afl_forksrv_nb_supl_gids;
 
   u8 *afl_tmpdir, *afl_custom_mutator_library, *afl_python_module, *afl_path,
-      *afl_hang_tmout, *afl_forksrv_init_tmout, *afl_preload,
+      *afl_hang_tmout, *afl_dyn_tmout, *afl_dyn_tmout_max, *afl_forksrv_init_tmout, *afl_preload,
       *afl_max_det_extras, *afl_statsd_host, *afl_statsd_port,
       *afl_crash_exitcode, *afl_statsd_tags_flavor, *afl_testcache_size,
       *afl_testcache_entries, *afl_child_kill_signal, *afl_fsrv_kill_signal,
@@ -750,6 +750,8 @@ typedef struct afl_state {
   u8 *virgin_bits,                      /* Regions yet untouched by fuzzing */
       *virgin_tmout,                    /* Bits we haven't seen in tmouts   */
       *virgin_crash;                    /* Bits we haven't seen in crashes  */
+
+  u8 *dyn_virgin_run;                   /* buckets this run hasn't shown yet */
 
   u8 *virgin_undo;              /* virgin_bits before the pending discovery */
   u8 *virgin_reclaim;                  /* handbacks per byte, see rollback  */
@@ -1442,6 +1444,8 @@ void consume_handicap(afl_state_t *, struct queue_entry *);
 void write_bitmap(afl_state_t *);
 u32  count_bits(afl_state_t *, u8 *);
 u32  count_bytes(afl_state_t *, u8 *);
+u8 dyn_mode1_new_coverage(void *);
+u8 dyn_mode2_new_coverage(void *);
 u32  count_non_255_bytes(afl_state_t *, u8 *);
 void simplify_trace(afl_state_t *, u8 *);
 #ifdef WORD_SIZE_64

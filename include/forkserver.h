@@ -104,6 +104,15 @@ typedef struct {
 nyx_plugin_handler_t *afl_load_libnyx_plugin(u8 *libnyx_binary);
 #endif
 
+#define DYN_MAX_CHECKS 12                  /* max checkpoints per run         */
+
+enum {
+  DYN_OUTCOME_NONE = 0,                    /* no checkpoint reached           */
+  DYN_OUTCOME_FINISHED = 1,                /* finished during extra time      */
+  DYN_OUTCOME_STALL = 2,                   /* killed: count didn't rise       */
+  DYN_OUTCOME_CAP = 3                      /* killed: hit the ceiling         */
+};
+
 typedef struct afl_forkserver {
 
   /* a program that includes afl-forkserver needs to define these */
@@ -125,10 +134,24 @@ typedef struct afl_forkserver {
 
   u32 exec_tmout;                       /* Configurable exec timeout (ms)   */
   u32 init_tmout;                       /* Configurable init timeout (ms)   */
+  u32 dyn_tmout_mode;                   /* Configurable dynamic mode (1 2)  */
+  u32 dyn_tmout_max;                    /* Dynamic mode ceiling (ms)        */
+  u8 dyn_active;                        /* If its a main run with dyn_tmout */
+  u32 dyn_elapsed_ms;                   /* Total time for dyn mode run      */
+  u32 dyn_last_checkpoint_ms;           /* tmout where dyn run was killed   */
+  u8 dyn_outcome;
+
+  // Useless fields im adding for dbug and stat exstraction
+  u8 dyn_n_checks;
+  u32 dyn_counts[DYN_MAX_CHECKS];
+  u64 dyn_total_extended, dyn_total_finished, dyn_total_stall, dyn_total_cap;
+
   u32 map_size;                         /* map size used by the target      */
   u32 real_map_size;                    /* real map size, unaligned         */
   u32 c11;                              /* is c11 feature used              */
   u64 mem_limit;                        /* Memory cap for child (MB)        */
+
+  u8 (*dyn_count_func)(void *);        /* Pointer for dyn mode functions   */
 
   u64 total_execs;                      /* How often run_target was called  */
 

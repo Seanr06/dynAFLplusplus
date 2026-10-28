@@ -260,6 +260,14 @@ void read_afl_environment(afl_state_t *afl, char **envp) {
             afl->afl_env.afl_hang_tmout =
                 (u8 *)get_afl_env(afl_environment_variables[i]);
 
+          } else if (!strncmp(env, "AFL_DYN_TMOUT", afl_environment_variable_len)) {
+
+            afl->afl_env.afl_dyn_tmout =
+                (u8 *)get_afl_env(afl_environment_variables[i]);
+          } else if (!strncmp(env, "AFL_DYN_TMOUT_MAX", afl_environment_variable_len)) {
+
+            afl->afl_env.afl_dyn_tmout_max =
+                (u8 *)get_afl_env(afl_environment_variables[i]);
           } else if (!strncmp(env, "AFL_KEEP_TIMEOUTS",
 
                               afl_environment_variable_len)) {

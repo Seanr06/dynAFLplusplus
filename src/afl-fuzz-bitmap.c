@@ -186,6 +186,84 @@ u32 count_bytes(afl_state_t *afl, u8 *mem) {
 
 }
 
+/**
+ * Figure out if the tmout for this run had more coverage then the last run 
+ * and return 1 for new cover or 8 bit range and 0 for no new noticable coverage
+ */
+
+u8 dyn_mode1_new_coverage(void *afl_ptr) {
+
+  afl_state_t *afl = (afl_state_t *)afl_ptr;
+  u8 *input_coverage = afl->fsrv.trace_bits;
+  u8 new_coverage = 0;
+
+  // If its the first run the prior tmout map wont exist so initialize it
+  if (unlikely(!afl->dyn_virgin_run)) {
+    afl->dyn_virgin_run = ck_alloc(afl->fsrv.map_size);
+  }
+
+  // clear the dyn_virgin_run map because its a new input and set
+  // every byte to 0xff to indicate it hasnt been seen
+  if (afl->fsrv.dyn_n_checks == 0) {
+    memset(afl->dyn_virgin_run, 0xff, afl->fsrv.map_size);
+  }
+
+  // Walk thorugh every edge and find out if a new edge or range has been hit
+  // compared to when it last timedout
+  for (u32 i = 0; i < afl->fsrv.real_map_size; i++) {
+
+    // skip edges this run hasn't hit
+    if (!input_coverage[i]) { continue; } 
+
+    // convert raw hit count into its bucket bit
+    u8 bucket = count_class_lookup8[input_coverage[i]];
+    if (bucket & afl->dyn_virgin_run[i]) {
+      new_coverage = 1;
+      afl->dyn_virgin_run[i] &= ~bucket;
+    }
+
+  }
+
+  return new_coverage;
+}
+
+u8 dyn_mode2_new_coverage(void *afl_ptr) {
+  afl_state_t *afl = (afl_state_t *)afl_ptr;
+  u8 *input_coverage = afl->fsrv.trace_bits;
+  u8 new_coverage = 0;
+
+  // If its the first run the prior tmout map wont exist so initialize it
+  if (unlikely(!afl->dyn_virgin_run)) {
+    afl->dyn_virgin_run = ck_alloc(afl->fsrv.map_size);
+  }
+
+  // clear the dyn_virgin_run map because its a new input and set
+  // every byte to 0xff to indicate it hasnt been seen
+  if (afl->fsrv.dyn_n_checks == 0) {
+    memset(afl->dyn_virgin_run, 0xff, afl->fsrv.map_size);
+  }
+
+  // Walk through every edge and find out if this run hit a new edge or range
+  // that the campaign has never seen (virgin_bits) and that this run hasn't
+  // already shown at an earlier checkpoint (dyn_virgin_run)
+  for (u32 i = 0; i < afl->fsrv.real_map_size; i++) {
+    // skip edges this run hasn't hit
+    if (!input_coverage[i]) { continue; }
+
+    // convert raw hit count into its bucket bit
+    u8 bucket = count_class_lookup8[input_coverage[i]];
+
+    // new to the campaign AND new to this run since its last checkpoint
+    if (bucket & afl->virgin_bits[i] & afl->dyn_virgin_run[i]) {
+      new_coverage = 1;
+      afl->dyn_virgin_run[i] &= ~bucket;
+    }
+  }
+
+  return new_coverage;
+
+}
+
 /* Count the number of non-255 bytes set in the bitmap. Used strictly for the
    status screen, several calls per second or so. */
 
@@ -1509,7 +1587,7 @@ may_save_fault:
          wall clock time, so it draws from the same budget as the backstop
          probe; without a free slot the confirmation stays at hang_tmout. */
 
-      if (!probed &&
+      if (!probed && !afl->fsrv.dyn_count_func &&
           afl->fsrv.exec_tmout < MAX(afl->hang_tmout, afl->exec_tmout_ceil)) {
 
         u8  new_fault;
@@ -1570,9 +1648,20 @@ may_save_fault:
 
       if (!afl->afl_env.afl_sha1_filenames) {
 
-        snprintf(fn, PATH_MAX, "%s/hangs/id:%06llu,%s%s%s", afl->out_dir,
+                u8 dyn_tag[48] = "";
+        if (afl->fsrv.dyn_outcome == DYN_OUTCOME_STALL) {
+          snprintf(dyn_tag, sizeof(dyn_tag), ",dyn:stall,ms:%u",
+                   afl->fsrv.dyn_last_checkpoint_ms);
+        } else if (afl->fsrv.dyn_outcome == DYN_OUTCOME_CAP) {
+          snprintf(dyn_tag, sizeof(dyn_tag), ",dyn:cap,ms:%u",
+                   afl->fsrv.dyn_last_checkpoint_ms);
+        }
+
+        snprintf(fn, PATH_MAX, "%s/hangs/id:%06llu,%s%s%s%s", afl->out_dir,
                  afl->saved_hangs,
-                 describe_op(afl, 0, NAME_MAX - strlen("id:000000,")),
+                 describe_op(afl, 0,
+                             NAME_MAX - strlen("id:000000,") - strlen(dyn_tag)),
+                 dyn_tag,
                  afl->file_extension ? "." : "",
                  afl->file_extension ? (const char *)afl->file_extension : "");
 
