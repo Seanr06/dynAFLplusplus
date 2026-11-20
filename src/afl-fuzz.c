@@ -2069,7 +2069,7 @@ void afl_check_environment(afl_state_t *afl) {
         afl->fsrv.exec_tmout = 5;
         afl->timeout_given = 1;
     }
-    if (dyn_tmout_mode < 0 || dyn_tmout_mode > 2) {FATAL("Invalid value for AFL_DYN_TMOUT"); }
+    if (dyn_tmout_mode < 0 || dyn_tmout_mode > 3) {FATAL("Invalid value for AFL_DYN_TMOUT"); }
     afl->fsrv.dyn_tmout_mode = (u32)dyn_tmout_mode;
 
     // pick which coverage check the timeout loop calls
@@ -2077,6 +2077,8 @@ void afl_check_environment(afl_state_t *afl) {
       afl->fsrv.dyn_count_func = dyn_mode1_new_coverage;
     } else if (afl->fsrv.dyn_tmout_mode == 2) {
       afl->fsrv.dyn_count_func = dyn_mode2_new_coverage;
+    } else if (afl->fsrv.dyn_tmout_mode == 3) {
+        afl->fsrv.dyn_count_func = dyn_mode3_new_coverage;
     }
   }
 

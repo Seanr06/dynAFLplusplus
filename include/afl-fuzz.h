@@ -752,6 +752,7 @@ typedef struct afl_state {
       *virgin_crash;                    /* Bits we haven't seen in crashes  */
 
   u8 *dyn_virgin_run;                   /* buckets this run hasn't shown yet */
+  u8  dyn_seen_campaign_new;            /* dyn run hit a new edge in campain */
 
   u8 *virgin_undo;              /* virgin_bits before the pending discovery */
   u8 *virgin_reclaim;                  /* handbacks per byte, see rollback  */
@@ -1446,6 +1447,7 @@ u32  count_bits(afl_state_t *, u8 *);
 u32  count_bytes(afl_state_t *, u8 *);
 u8 dyn_mode1_new_coverage(void *);
 u8 dyn_mode2_new_coverage(void *);
+u8 dyn_mode3_new_coverage(void *);
 u32  count_non_255_bytes(afl_state_t *, u8 *);
 void simplify_trace(afl_state_t *, u8 *);
 #ifdef WORD_SIZE_64

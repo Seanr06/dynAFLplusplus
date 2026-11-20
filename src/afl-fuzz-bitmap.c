@@ -227,6 +227,9 @@ u8 dyn_mode1_new_coverage(void *afl_ptr) {
   return new_coverage;
 }
 
+/**
+ * Compare to last checkpoint at prior dyn bitmap and campain bitmap
+ */
 u8 dyn_mode2_new_coverage(void *afl_ptr) {
   afl_state_t *afl = (afl_state_t *)afl_ptr;
   u8 *input_coverage = afl->fsrv.trace_bits;
@@ -248,7 +251,9 @@ u8 dyn_mode2_new_coverage(void *afl_ptr) {
   // already shown at an earlier checkpoint (dyn_virgin_run)
   for (u32 i = 0; i < afl->fsrv.real_map_size; i++) {
     // skip edges this run hasn't hit
-    if (!input_coverage[i]) { continue; }
+    if (!input_coverage[i]) { 
+        continue; 
+    }
 
     // convert raw hit count into its bucket bit
     u8 bucket = count_class_lookup8[input_coverage[i]];
@@ -261,7 +266,53 @@ u8 dyn_mode2_new_coverage(void *afl_ptr) {
   }
 
   return new_coverage;
+}
 
+/**
+ * Mode 3: the run must hit something new to the campaign (virgin_bits) once.
+ * After that it keeps getting time only while it reaches new edges or
+ * hit-count buckets compared with its own earlier checkpoints (like mode 1).
+ */
+u8 dyn_mode3_new_coverage(void *afl_ptr) {
+  afl_state_t *afl = (afl_state_t *)afl_ptr;
+  u8 *input_coverage = afl->fsrv.trace_bits;
+  u8 new_coverage = 0;
+
+  // If its the first run the prior tmout map wont exist so initialize it
+  if (unlikely(!afl->dyn_virgin_run)) {
+    afl->dyn_virgin_run = ck_alloc(afl->fsrv.map_size);
+  }
+
+  // new input: nothing seen yet this run, and no campaign-new hit yet
+  if (afl->fsrv.dyn_n_checks == 0) {
+    memset(afl->dyn_virgin_run, 0xff, afl->fsrv.map_size);
+    afl->dyn_seen_campaign_new = 0;
+  }
+
+  for (u32 i = 0; i < afl->fsrv.real_map_size; i++) {
+    // skip edges this run hasn't hit
+    if (!input_coverage[i]) {
+        continue;
+    }
+
+    // convert raw hit count into its bucket bit
+    u8 bucket = count_class_lookup8[input_coverage[i]];
+
+    // new for this run since its last checkpoint
+    if (bucket & afl->dyn_virgin_run[i]) {
+      new_coverage = 1;
+
+      // is it also new to the whole campaign?
+      if (bucket & afl->virgin_bits[i]) {
+        afl->dyn_seen_campaign_new = 1;
+      }
+
+      afl->dyn_virgin_run[i] &= ~bucket;
+    }
+  }
+
+  // keep going only if the run is still moving 
+  return new_coverage && afl->dyn_seen_campaign_new;
 }
 
 /* Count the number of non-255 bytes set in the bitmap. Used strictly for the
